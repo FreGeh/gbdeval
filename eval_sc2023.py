@@ -17,7 +17,7 @@
 
 import os
 import itertools
-import numpy as np
+import polars as pl
 
 from gbd_core.api import GBD
 from gbd_eval import scatter, cactus, scores, tables, util
@@ -42,12 +42,12 @@ class Generator:
     def generate_cdf_plot(self):
         data = DataPreprocessor(self.gbd, self.query, self.solvers)
         df = data.numeric(self.solvers).penalize(self.solvers, self.max_runtime).vbs(self.solvers).get()
-        cactus.cactus(df.copy(), self.solvers + ["vbs"], holy=False, max=self.max_runtime, to_latex="{}/cdf.pdf".format(self.target_dir))
+        cactus.cactus(df.clone(), self.solvers + ["vbs"], holy=False, max=self.max_runtime, to_latex="{}/cdf.pdf".format(self.target_dir))
 
     def generate_cactus_plot(self):
         data = DataPreprocessor(self.gbd, self.query, self.solvers)
         df = data.numeric(self.solvers).penalize(self.solvers, self.max_runtime).vbs(self.solvers).get()
-        cactus.cactus(df.copy(), self.solvers + ["vbs"], holy=True, max=self.max_runtime, to_latex="{}/cactus.pdf".format(self.target_dir))
+        cactus.cactus(df.clone(), self.solvers + ["vbs"], holy=True, max=self.max_runtime, to_latex="{}/cactus.pdf".format(self.target_dir))
 
     def generate_scatter_plot(self, s0: str, s1: str, name: str):
         data = DataPreprocessor(self.gbd, self.query, [s0, s1, "family"])
@@ -64,8 +64,8 @@ class Generator:
     def generate_cdf_per_family(self):
         data = DataPreprocessor(self.gbd, self.query, self.solvers + ["family"])
         df = data.numeric(self.solvers).penalize(self.solvers, self.max_runtime).remainder("family").vbs(self.solvers).get()
-        for fam in df["family"].unique():
-            subdf = df.query("family == '{}'".format(fam))
+        for fam in df.get_column("family").unique().to_list():
+            subdf = df.filter(pl.col("family") == fam)
             cactus.cdf(subdf, self.solvers, title=fam, num=7, max=self.max_runtime,
                         #legend_separate="gen/sc2023/cdfs/leg-{}.pdf".format(fam), 
                         to_latex="{}/cdf-{}.pdf".format(self.target_dir, fam))
@@ -78,16 +78,17 @@ class Generator:
     def get_best_portfolio(self, size: int = 3):
         pfgen = Portfolios(self.gbd, self.query, self.solvers, self.max_runtime)
         pfs = pfgen.generate(max_k=size+1, beam_width=10).sorted().get(n_best=1)
-        return pfs.query("k == {}".format(size))["portfolio"].values[0].split(",")
+        return pfs.filter(pl.col("k") == size).get_column("portfolio").to_list()[0].split(",")
 
     def get_scores_table(self, solvers: list[str], timeout_val: int = 10000):
         data = DataPreprocessor(self.gbd, self.query, solvers)
         df = data.numeric(solvers).penalize(solvers, self.max_runtime).vbs(solvers).get()
         tab = scores.scores(df)
-        dfc = df[solvers + ["vbs"]].mask(lambda col: col >= timeout_val, np.nan).mask(lambda col: col < 10000, "yes").count().to_frame("solved")
-        tab = tab.merge(dfc, left_index=True, right_index=True)
-        tab.sort_values(by="score", ascending=True, inplace=True)
-        return tab
+        dfc = pl.DataFrame({
+            "solver": solvers + ["vbs"],
+            "solved": [df.select((pl.col(solver) < timeout_val).sum()).item() for solver in solvers + ["vbs"]],
+        })
+        return tab.join(dfc, on="solver", how="left").sort("score")
 
 
 def generate():
@@ -172,9 +173,8 @@ def generate():
                         solvers.remove(trash)
             gen = Generator("track = main_2023", data["files"], solvers, "gen/sc2023/{}".format(track), data['timeout'])
             subtab = gen.get_scores_table(solvers, timeout_val=data['timeout']*2)
-            tab = subtab if tab is None else tab.merge(subtab, left_index=True, right_index=True, suffixes=("", "_{}".format(data["sub"])))
+            tab = subtab if tab is None else tab.join(subtab, on="solver", how="left", suffix="_{}".format(data["sub"]))
         print(tab)
-        #tab.reset_index(inplace=True, drop=True)
         target = "gen/sc2023/{}/overall".format(list(tracks.keys())[0])
         tables.scores(tab, to_latex="{}.tex".format(target), to_html="{}.html".format(target))
         #exit()

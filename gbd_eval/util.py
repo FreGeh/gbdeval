@@ -2,7 +2,7 @@ import sys
 
 sc2023dict = {
     "vbs": "VBS",
-    "count": "\#",
+    "count": r"\#",
     # Solvers in Main Track:
     "AMSAT_": "AMSAT",
     "CaDiCaL_vivinst": "Cadical vivinst",
@@ -69,7 +69,7 @@ sc2023dict = {
 }
 
 familydict = {
-    "all": "\hline All",
+    "all": r"\hline All",
     "profitable-robust-production": "Production (prp)",
     "or_randxor": "Random XOR",
     "interval-matching": "Interval Matching",

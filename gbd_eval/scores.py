@@ -14,29 +14,33 @@
 
 # run: ./eval.py
 
-import pandas as pd
+import polars as pl
 
 
-def scores(df: pd.DataFrame):
-    return df.mean(numeric_only=True).to_frame("score")
+def scores(df: pl.DataFrame):
+    numeric_cols = [
+        name for name, dtype in df.schema.items()
+        if dtype.is_numeric()
+    ]
+    return pl.DataFrame({
+        "solver": numeric_cols,
+        "score": [df.get_column(name).mean() for name in numeric_cols],
+    })
 
     
-def scores_group_wise(df: pd.DataFrame, solvers: list[str], groups: list[str], sortby: str = "count"):
-    #group:
-    counts = df.groupby('family').count()["hash"].rename("count")
-    groups = df.groupby('family').mean(numeric_only=True)
-    tab = groups.merge(counts, on='family', how='left')
-    tab.reset_index(inplace=True)
-    #reorder:
-    tab["diff"] = tab[solvers].max(axis=1) - tab[solvers].min(axis=1)
-    tab["quot"] = tab[solvers].max(axis=1) / tab[solvers].min(axis=1)
-    tab["diff2"] = tab[solvers].median(axis=1) - tab[solvers].min(axis=1)
-    tab["quot2"] = tab[solvers].median(axis=1) / tab[solvers].min(axis=1)
-    tab.sort_values(by=sortby, ascending=False, inplace=True)
-    tab = tab[["family", "count"] + solvers + ["vbs"]]
-    #add all:
-    all = scores(df).transpose()
-    all["family"] = "all"
-    all["count"] = len(df.index)    
-    tab = pd.concat([tab, all], ignore_index=True)
-    return tab
+def scores_group_wise(df: pl.DataFrame, solvers: list[str], groups: list[str], sortby: str = "count"):
+    group = groups[0]
+    score_cols = solvers + (["vbs"] if "vbs" in df.columns else [])
+    counts = df.group_by(group).agg(pl.len().alias("count"))
+    means = df.group_by(group).agg(pl.col(score_cols).mean())
+    tab = means.join(counts, on=group, how="left")
+    tab = tab.with_columns([
+        (pl.max_horizontal(*[pl.col(solver) for solver in solvers]) - pl.min_horizontal(*[pl.col(solver) for solver in solvers])).alias("diff"),
+        (pl.max_horizontal(*[pl.col(solver) for solver in solvers]) / pl.min_horizontal(*[pl.col(solver) for solver in solvers])).alias("quot"),
+        (pl.concat_list([pl.col(solver) for solver in solvers]).list.median() - pl.min_horizontal(*[pl.col(solver) for solver in solvers])).alias("diff2"),
+        (pl.concat_list([pl.col(solver) for solver in solvers]).list.median() / pl.min_horizontal(*[pl.col(solver) for solver in solvers])).alias("quot2"),
+    ])
+    tab = tab.sort(sortby, descending=True).select([group, "count"] + score_cols)
+    all_row = {group: "all", "count": df.height}
+    all_row.update({solver: df.get_column(solver).mean() for solver in score_cols})
+    return pl.concat([tab, pl.DataFrame([all_row]).select(tab.columns)], how="vertical_relaxed")

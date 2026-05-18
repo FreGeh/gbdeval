@@ -6,7 +6,7 @@ In the following, we predict the benchmark instance labels provided by GBD's met
 
 ```python
 from gbd_core.api import GBD
-import pandas as pd
+import polars as pl
 
 def get_available_features():
     with GBD([ 'data/base.db' ]) as gbd:
@@ -15,7 +15,7 @@ def get_available_features():
 def get_prediction_dataset(features, target):
     with GBD([ 'data/base.db', 'data/meta.db' ]) as gbd:
         df = gbd.query('base_features_runtime != memout', resolve=features+[target])
-        df[features] = df[features].apply(pd.to_numeric)
+        df = df.with_columns(pl.col(features).cast(pl.Float64, strict=False))
         return df
     
 print(get_available_features())
@@ -37,10 +37,15 @@ from sklearn.metrics import accuracy_score
 feat = get_available_features()
 data = get_prediction_dataset(feat, 'family')
 
-X_train, X_test, y_train, y_test = train_test_split(data[feat], data['family'], test_size=0.2, random_state=42)
+train_idx, test_idx = train_test_split(range(data.height), test_size=0.2, random_state=42)
+indexed = data.with_row_index("__row_nr")
+train = indexed.filter(pl.col("__row_nr").is_in(train_idx)).drop("__row_nr")
+test = indexed.filter(pl.col("__row_nr").is_in(test_idx)).drop("__row_nr")
+X_train, X_test = train.select(feat), test.select(feat)
+y_train, y_test = train.get_column("family").to_numpy(), test.get_column("family").to_numpy()
 model = RandomForestClassifier()
-model.fit(X_train, y_train)
-y_pred = model.predict(X_test)
+model.fit(X_train.to_numpy(), y_train)
+y_pred = model.predict(X_test.to_numpy())
 print("Accuracy:", accuracy_score(y_test, y_pred))
 
 ```
@@ -86,23 +91,22 @@ subsets = {
 
 for name, sub in subsets.items():
     submodel = RandomForestClassifier()
-    submodel.fit(X_train[sub], y_train)
-    y_pred_sub = submodel.predict(X_test[sub])
+    submodel.fit(X_train.select(sub).to_numpy(), y_train)
+    y_pred_sub = submodel.predict(X_test.select(sub).to_numpy())
     accuracy_feature = accuracy_score(y_test, y_pred_sub)
     print(f"Accuracy with {name} features:", accuracy_feature)
     print_feature_importances(submodel, sub)
 ```
 
-    Accuracy with Clause Counts features: 0.9498005319148937
-    Feature importances: [((0.08, 0.1), ['cls2', 'cls3', 'cls10p', 'negative']), ((0.06, 0.08), ['variables', 'cls1', 'horn', 'positive']), ((0.04, 0.06), ['clauses', 'cls4', 'cls8', 'cls9', 'invhorn']), ((0.02, 0.04), ['cls5', 'cls6', 'cls7'])]
-    Accuracy with Horn Variables features: 0.937998670212766
-    Feature importances: [((0.18, 0.2), ['hornvars_mean']), ((0.16, 0.18), ['hornvars_variance']), ((0.14, 0.16), ['hornvars_entropy']), ((0.12, 0.14), ['invhornvars_mean']), ((0.1, 0.12), ['hornvars_max']), ((0.08, 0.1), ['invhornvars_variance', 'invhornvars_entropy']), ((0.06, 0.08), ['invhornvars_max']), ((0.0, 0.02), ['hornvars_min', 'invhornvars_min'])]
-    Accuracy with Polarity Balance features: 0.9398271276595744
-    Feature importances: [((0.18, 0.2), ['balancevars_mean']), ((0.14, 0.16), ['balancecls_mean']), ((0.12, 0.14), ['balancecls_variance', 'balancevars_variance']), ((0.1, 0.12), ['balancevars_entropy']), ((0.08, 0.1), ['balancecls_entropy', 'balancevars_min']), ((0.06, 0.08), ['balancecls_max']), ((0.04, 0.06), ['balancevars_max']), ((0.0, 0.02), ['balancecls_min'])]
-    Accuracy with Bipartite Graph features: 0.9571143617021277
-    Feature importances: [((0.2, 0.22), ['vcg_cdegree_mean']), ((0.14, 0.16), ['vcg_cdegree_variance']), ((0.12, 0.14), ['vcg_vdegree_mean']), ((0.1, 0.12), ['vcg_vdegree_entropy', 'vcg_cdegree_max', 'vcg_cdegree_entropy']), ((0.06, 0.08), ['vcg_vdegree_variance', 'vcg_vdegree_max']), ((0.04, 0.06), ['vcg_cdegree_min']), ((0.0, 0.02), ['vcg_vdegree_min'])]
-    Accuracy with Variable Graph features: 0.9336768617021277
-    Feature importances: [((0.32, 0.34), ['vg_degree_mean']), ((0.24, 0.26), ['vg_degree_entropy']), ((0.2, 0.22), ['vg_degree_variance', 'vg_degree_max']), ((0.0, 0.02), ['vg_degree_min'])]
+    Accuracy with Clause Counts features: 0.9514627659574468
+    Feature importances: [((0.08, 0.1), ['cls1', 'cls2', 'cls3', 'cls10p', 'negative']), ((0.06, 0.08), ['variables', 'horn', 'positive']), ((0.04, 0.06), ['clauses', 'cls4', 'cls8', 'cls9', 'invhorn']), ((0.02, 0.04), ['cls5', 'cls6', 'cls7'])]
+    Accuracy with Horn Variables features: 0.9351728723404256
+    Feature importances: [((0.16, 0.18), ['hornvars_mean', 'hornvars_entropy']), ((0.14, 0.16), ['hornvars_variance']), ((0.12, 0.14), ['hornvars_max', 'invhornvars_mean']), ((0.08, 0.1), ['invhornvars_variance', 'invhornvars_entropy']), ((0.06, 0.08), ['invhornvars_max']), ((0.0, 0.02), ['hornvars_min', 'invhornvars_min'])]
+    Accuracy with Polarity Balance features: 0.9371675531914894
+    Feature importances: [((0.18, 0.2), ['balancevars_mean']), ((0.16, 0.18), ['balancecls_mean']), ((0.12, 0.14), ['balancecls_variance']), ((0.1, 0.12), ['balancevars_variance', 'balancevars_entropy']), ((0.08, 0.1), ['balancecls_entropy', 'balancevars_min']), ((0.06, 0.08), ['balancecls_max']), ((0.04, 0.06), ['balancevars_max']), ((0.0, 0.02), ['balancecls_min'])]
+    Accuracy with Bipartite Graph features: 0.9586103723404256
+    Feature importances: [((0.2, 0.22), ['vcg_cdegree_mean']), ((0.12, 0.14), ['vcg_vdegree_mean', 'vcg_cdegree_variance', 'vcg_cdegree_entropy']), ((0.1, 0.12), ['vcg_vdegree_entropy']), ((0.08, 0.1), ['vcg_cdegree_max']), ((0.06, 0.08), ['vcg_vdegree_variance', 'vcg_vdegree_max']), ((0.04, 0.06), ['vcg_cdegree_min']), ((0.0, 0.02), ['vcg_vdegree_min'])]
+    Accuracy with Variable Graph features: 0.9350066489361702
+    Feature importances: [((0.34, 0.36), ['vg_degree_mean']), ((0.24, 0.26), ['vg_degree_entropy']), ((0.2, 0.22), ['vg_degree_max']), ((0.18, 0.2), ['vg_degree_variance']), ((0.0, 0.02), ['vg_degree_min'])]
     Accuracy with Clause Graph features: 0.9378324468085106
-    Feature importances: [((0.22, 0.24), ['cg_degree_max']), ((0.18, 0.2), ['cg_degree_mean', 'cg_degree_variance', 'cg_degree_min', 'cg_degree_entropy'])]
-
+    Feature importances: [((0.2, 0.22), ['cg_degree_max', 'cg_degree_entropy']), ((0.18, 0.2), ['cg_degree_mean', 'cg_degree_variance', 'cg_degree_min'])]

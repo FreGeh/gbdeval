@@ -18,7 +18,7 @@
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
+import polars as pl
 
 from gbd_eval.util import name
 
@@ -51,12 +51,16 @@ def export_legend(legend, filename="legend.pdf"):
     #bbox = bbox.from_extents(*(bbox.extents + np.array([0.05, .25, -0.05, -0.02])))
     fig.savefig(filename, dpi="figure", bbox_inches=bbox)
 
-def depenalize(df: pd.DataFrame, solvers: list[str], max=5000):
-    for name in solvers:
-        df.loc[df[name] > max, name] = max
-    return df
+def depenalize(df: pl.DataFrame, solvers: list[str], max=5000):
+    return df.with_columns([
+        pl.when(pl.col(name) > max)
+        .then(max)
+        .otherwise(pl.col(name))
+        .alias(name)
+        for name in solvers
+    ])
 
-def scatter(df: pd.DataFrame, solver1, solver2, groupcol, title=None, max=5000, legend_separate=None, to_latex=None, logscale=False, print_delta=False):
+def scatter(df: pl.DataFrame, solver1, solver2, groupcol, title=None, max=5000, legend_separate=None, to_latex=None, logscale=False, print_delta=False):
     colors = ['#113377','#e41a1c','#377eb8','#4daf4a','#984ea3','#ff7f00','#a65628']
     markers = [ '1', 'x', '*', '+', '.' ]
     fig, ax = plt.subplots(figsize=(3.5,3.5))
@@ -77,22 +81,25 @@ def scatter(df: pd.DataFrame, solver1, solver2, groupcol, title=None, max=5000, 
     ax.spines['left'].set_visible(False)
 
     # sort group by score difference
-    gf = df.groupby(groupcol).mean(numeric_only=True).reset_index()
-    gf["diff"] = gf[solver1] - gf[solver2]
-    gf["adiff"] = gf["diff"].abs()
-    gf.sort_values(by='adiff', ascending=False, inplace=True)
+    gf = (
+        df.group_by(groupcol)
+        .agg(pl.col([solver1, solver2]).mean())
+        .with_columns((pl.col(solver1) - pl.col(solver2)).alias("diff"))
+        .with_columns(pl.col("diff").abs().alias("adiff"))
+        .sort("adiff", descending=True)
+    )
 
-    df = depenalize(df.copy(), [solver1, solver2], max)
+    df = depenalize(df, [solver1, solver2], max)
 
-    for i, group in enumerate(gf[groupcol], 0):
+    for i, group in enumerate(gf.get_column(groupcol).to_list(), 0):
         m = markers[i % len(markers)]
         c = colors[i % len(colors)]
-        fdf = df.loc[df[groupcol] == group]
-        gdelta = "{:.2f}".format(gf.loc[gf[groupcol] == group]["diff"].values[0])
+        fdf = df.filter(pl.col(groupcol) == group)
+        gdelta = "{:.2f}".format(gf.filter(pl.col(groupcol) == group).get_column("diff").item())
         title = name(group)
         if print_delta:
-            title = title + " ($\Delta_{xy}=$" + gdelta + ")"
-        ax.scatter(fdf[solver1], fdf[solver2], color=c, marker=m, s=30, alpha=.7, linewidth=.7, zorder=i, label=title)
+            title = title + r" ($\Delta_{xy}=$" + gdelta + ")"
+        ax.scatter(fdf.get_column(solver1).to_list(), fdf.get_column(solver2).to_list(), color=c, marker=m, s=30, alpha=.7, linewidth=.7, zorder=i, label=title)
 
     ax.set_aspect('equal', 'box')
     lege = ax.legend(loc='center left', bbox_to_anchor=(1.0, .5), ncol=1, frameon=False, fontsize='xx-small', borderaxespad=0, columnspacing=0, labelspacing=.3)

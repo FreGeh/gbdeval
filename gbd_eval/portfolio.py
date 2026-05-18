@@ -14,19 +14,17 @@
 
 # run: ./eval.py
 
-import pandas as pd
+import polars as pl
 from itertools import combinations
-from gbd_eval import tables
-from gbd_eval.util import name
 from gbd_eval.preprocess import DataPreprocessor
 
-def pscore(df: pd.DataFrame, solvers: list[str]):
-    return df[solvers].min(axis=1).mean()
+def pscore(df: pl.DataFrame, solvers: list[str]):
+    return df.select(pl.min_horizontal(*[pl.col(solver) for solver in solvers]).mean()).item()
 
-def pscores_all(df: pd.DataFrame, solvers: list[str], k: int):
+def pscores_all(df: pl.DataFrame, solvers: list[str], k: int):
     return sorted([ (comb, pscore(df, list(comb))) for comb in combinations(solvers, k) ], key=lambda k : k[1])
 
-def pscores_ext(df: pd.DataFrame, solvers: list[str], tuples: list[tuple[str]]):
+def pscores_ext(df: pl.DataFrame, solvers: list[str], tuples: list[tuple[str]]):
     tupset = set(frozenset(comb + (s,)) for comb in tuples for s in solvers if s not in comb)
     return sorted([ (tuple(comb), pscore(df, list(comb))) for comb in tupset ], key=lambda k : k[1])
 
@@ -54,8 +52,9 @@ class Portfolios:
         return self
 
     def get(self, n_best: int = 3, rename = lambda s : s):
-        structured = { (len(tup), ",".join([rename(t) for t in tup])): score for portfolios in self.pfs for (tup, score) in portfolios[:n_best] }
-        df = pd.DataFrame(structured, index=["score"]).transpose()
-        df.index.names = ["k", "portfolio"]
-        df.reset_index(inplace=True)
-        return df
+        rows = [
+            {"k": len(tup), "portfolio": ",".join([rename(t) for t in tup]), "score": score}
+            for portfolios in self.pfs
+            for (tup, score) in portfolios[:n_best]
+        ]
+        return pl.DataFrame(rows)

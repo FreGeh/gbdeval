@@ -14,7 +14,7 @@
 
 # run: ./eval.py
 
-import pandas as pd
+import polars as pl
 import matplotlib.pyplot as plt
 
 from gbd_eval.scatter import export_legend
@@ -31,13 +31,13 @@ def plt_decorate_cactus_plot_area(num=400, min=0, max=5000, holy=False):
         plt.ylim(0, num)
 
 
-def cactus(df: pd.DataFrame, solvers: list[str], title=None, num=17, max=5000, legend_separate=None, to_latex=None, holy=True):
+def cactus(df: pl.DataFrame, solvers: list[str], title=None, num=17, max=5000, legend_separate=None, to_latex=None, holy=True):
     colors = ['#113377','#e41a1c','#377eb8','#4daf4a','#984ea3','#ff7f00','#a65628']
     markers = [ '1', 'x', '*', '+', '.' ]
 
     fig, ax = plt.subplots(figsize=(3.5,3.5))
 
-    plt_decorate_cactus_plot_area(len(df.index), min=0, max=max, holy=holy)
+    plt_decorate_cactus_plot_area(df.height, min=0, max=max, holy=holy)
     if title is not None:
         ax.set_title(title, fontsize=6, variant='small-caps')
     # remove spines:
@@ -46,8 +46,8 @@ def cactus(df: pd.DataFrame, solvers: list[str], title=None, num=17, max=5000, l
     ax.spines['bottom'].set_visible(False)
     ax.spines['left'].set_visible(False)
 
-    df2 = pd.concat([df[col].sort_values(ascending=True, ignore_index=True) for col in solvers], axis=1)
-    avg = df2.mean(numeric_only=True)
+    df2 = pl.DataFrame({col: df.get_column(col).sort() for col in solvers})
+    avg = {col: df2.get_column(col).mean() for col in solvers}
     solvers.sort(key=lambda x: avg[x])
 
 
@@ -58,7 +58,7 @@ def cactus(df: pd.DataFrame, solvers: list[str], title=None, num=17, max=5000, l
         m = markers[i % len(markers)]
         c = colors[i % len(colors)]
         o = len(solvers) - i
-        line = ax.plot(df2[col], label=name(col), zorder=o, marker=m, color=c, fillstyle='none', alpha=.7, linewidth=.5*k, markeredgewidth=.5*k, markersize=3*k, drawstyle='steps-post')
+        line = ax.plot(df2.get_column(col).to_list(), label=name(col), zorder=o, marker=m, color=c, fillstyle='none', alpha=.7, linewidth=.5*k, markeredgewidth=.5*k, markersize=3*k, drawstyle='steps-post')
         lines.append(line[0])
 
     lege = plt.legend(loc='center left', bbox_to_anchor=(1.0, .5), ncol=1, frameon=False, fontsize='x-small', borderaxespad=1.5, columnspacing=0, labelspacing=.7)
@@ -72,9 +72,9 @@ def cactus(df: pd.DataFrame, solvers: list[str], title=None, num=17, max=5000, l
             xdata, ydata = line.get_xdata(), line.get_ydata()
             line.set_xdata(ydata)
             line.set_ydata(xdata)
-        ax.set_aspect(max / len(df2.index))
+        ax.set_aspect(max / df2.height)
     else:
-        ax.set_aspect(len(df2.index) / max)
+        ax.set_aspect(df2.height / max)
 
     if to_latex is None:
         plt.show()
@@ -84,6 +84,5 @@ def cactus(df: pd.DataFrame, solvers: list[str], title=None, num=17, max=5000, l
     plt.close()
 
 
-def cdf(df: pd.DataFrame, solvers: list[str], title=None, num=17, max=5000, legend_separate=None, to_latex=None):
+def cdf(df: pl.DataFrame, solvers: list[str], title=None, num=17, max=5000, legend_separate=None, to_latex=None):
     cactus(df, solvers=solvers, title=title, num=num, max=max, legend_separate=legend_separate, to_latex=to_latex, holy=False)
-
